@@ -1,0 +1,27 @@
+{
+  "users": {
+    "tomas": {
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
+      "monitor_size_x": 1920,
+      "monitor_size_y": 1080,
+      "cookies": {
+        "xf_user": "xf_user",
+        "xf_tfa_trust": "xf_tfa_trust"
+      }}
+},
+  "proxy_type": 0,
+  "lolz_domain": "lolz.guru",
+  "lolz_google_key": "6LcyHRAUAAAAAFTgW0-TXQQLG_n1O91MnHNcGkpA",
+  "anti_captcha_key": "anti_captcha_key",
+  "send_referral_to_creator": true,
+  "answers_server": "answers.acuifex.ru",
+  "found_count": 8,
+  "low_time": 5,
+  "high_time": 20,
+  "switch_time": 1,
+  "solve_time": 1,
+  "tg_token": "tg_token",
+  "tg_id": id,
+  "cookie": "cookie",
+  "user_agent": "user-agent"
+}

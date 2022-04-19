@@ -9,13 +9,18 @@ import re
 import time
 import coloredlogs
 import verboselogs
-from logging.handlers import RotatingFileHandler
 import sys
 import os
 from Crypto.Cipher import AES
+import utils
+
+import requests
 
 import settings
 import solvers
+
+tg_token = settings.tg_token
+tg_id = settings.tg_id
 
 fmterr = Format(
     max_value_str_len=-1,
@@ -41,17 +46,8 @@ level_styles = {'debug': {'color': 8},
 logfmtstr = "%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s"
 logfmt = coloredlogs.ColoredFormatter(logfmtstr, level_styles=level_styles)
 
-# rotate every 4 megs
-fileHandler = RotatingFileHandler("lolzautocontest.log", maxBytes=1024 * 1024 * 4, backupCount=10, encoding='utf-8')
-fileHandler.setFormatter(logfmt)
-
 pattern_csrf = re.compile(r'_csrfToken:\s*\"(.*)\",', re.MULTILINE)
 pattern_df_id = re.compile(r'document\.cookie\s*=\s*"([^="]+)="\s*\+\s*toHex\(slowAES\.decrypt\(toNumbers\(\"([0-9a-f]{32})\"\)', re.MULTILINE)
-
-
-# consoleHandler = logging.StreamHandler(sys.stdout)
-# consoleHandler.setFormatter(logfmt)
-
 
 class User:
     def makerequest(self,
@@ -66,24 +62,31 @@ class User:
                 resp.raise_for_status()
             except httpx.TimeoutException as e:
                 self.logger.warning("%s timeout", e.request.url)
+                text = f"[WARN] {e.request.url} timeout"
+                requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
                 self.changeproxy()
                 time.sleep(settings.low_time)
             except httpx.ProxyError as e:
                 self.logger.warning("%s proxy error (%s)", e.request.url, str(e))
+                text = f"[WARN] {e.request.url} proxy error ({e})"                
                 self.changeproxy()
                 time.sleep(settings.low_time)
             except httpx.TransportError as e:
                 self.logger.warning("%s TransportError (%s)", e.request.url, str(e))
+                text = f"[WARN] {e.request.url} TransportError ({e})"
                 self.changeproxy()
                 time.sleep(settings.low_time)
             except httpx.HTTPStatusError as e:
                 self.logger.warning("%s responded with %s status", e.request.url, e.response.status_code)
+                text = f"[WARN] {e.request.url} responded with {e.response.status_code} status"
                 time.sleep(settings.low_time)
             else:
                 if checkforjs:
                     soup = BeautifulSoup(resp.text, "html.parser")
                     if self.checkforjsandfix(soup):
                         self.logger.debug("%s had JS PoW", url)
+                        text = f"[DEBUG] {url} had JS PoW"
+        
                         continue  # we have js gayness
 
                 return resp
@@ -105,12 +108,14 @@ class User:
             return False
 
         self.logger.verbose("lolz asks to complete aes task")
+        text = f"lolz asks to complete aes task"
 
         match = pattern_df_id.search(script[1].string)
         cipher = AES.new(bytearray.fromhex("e9df592a0909bfa5fcff1ce7958e598b"), AES.MODE_CBC,
                          bytearray.fromhex("5d10aa76f4aed1bdf3dbb302e8863d52"))
         value = cipher.decrypt(bytearray.fromhex(match.group(2))).hex()
         self.logger.debug("PoW answer %s", str(value))
+        text = f"PoW answer {value}"
         self.session.cookies.set(domain="." + settings.lolzdomain,
                                  name=match.group(1),
                                  value=value)
@@ -124,6 +129,10 @@ class User:
         if settings.proxy_type == 1:
             randstr = ''.join(random.choices(string.ascii_lowercase, k=5))
             self.logger.verbose("changing proxy to %s", randstr)
+
+            text = "changing proxy to {randstr}"
+            requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
+
             newProxy = {'all://': 'socks5://{}@localhost:9050'.format(randstr + ":" + self.username)}
         elif settings.proxy_type == 2:  # these are the moments i wish python had switch cases
             self.current_proxy_number += 1
@@ -172,6 +181,7 @@ class User:
         if submitresp is None:
             return None
 
+
         submit = submitresp.json()
         self.logger.debug(submit)
         if submit["status"] == 0:
@@ -187,9 +197,6 @@ class User:
                                         'id': submit["request"],
                                         'json': 1
                                     })
-            if resp is None:
-                continue
-                
             answer = resp.json()
             self.logger.debug(answer)
             if answer["status"] == 0 and answer["request"] == "CAPCHA_NOT_READY":
@@ -217,33 +224,43 @@ class User:
         script = contestSoup.find("script", text=pattern_csrf)
         if script is None:
             self.logger.error("%s", str(contestSoup))
+            text = f"[ERROR] no csrf token"
+            requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
             raise RuntimeError("no csrf token!")
 
         csrf = pattern_csrf.search(script.string).group(1)
         if not csrf:
             self.logger.critical("%s", str(contestSoup))
+            text = f"[ERROR] csrf token is empty. likely bad cookies"
+            requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
             raise RuntimeError("csrf token is empty. likely bad cookies")
         self.logger.debug("csrf: %s", str(csrf))
 
         ContestCaptcha = contestSoup.find("div", class_="ContestCaptcha")
         if ContestCaptcha is None:
             self.logger.warning("Couldn't get ContestCaptcha. Lag or contest is over?")
+            text = f"[INFO] Couldn't get ContestCaptcha. Lag or contest is over?"
             return False
 
         divcaptcha = ContestCaptcha.find("div", class_="captchaBlock")
         if divcaptcha is None:
             self.logger.warning("Couldn't get captchaBlock. Lag or contest is over?")
+            text = f"[INFO] Couldn't get captchaBlock. Lag or contest is over?"
             return False
 
         captchatypeobj = divcaptcha.find("input", attrs={"name": "captcha_type"})
 
         if captchatypeobj is None:
             self.logger.warning("captcha_type not found. adding to blacklist...")
+            text = f"[INFO] Captcha_type not found. adding to blacklist..."
+            requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
             self.blacklist.add(thrid)
             return False
 
         captchaType = captchatypeobj.get("value")
         if captchaType != "AnswerCaptcha":
+            text = f"[INFO] Captcha type changed. bailing out"
+            requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
             raise RuntimeError("Captcha type changed. bailing out")
 
         participateParams = self.solver.solve(divcaptcha)
@@ -252,6 +269,8 @@ class User:
 
         googleParams = self.solvegoogle(ContestCaptcha, settings.lolzUrl + "threads/" + str(thrid) + "/")
         if googleParams is None:
+            text = f"[INFO] google captcha response empty"
+            requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
             self.logger.warning("google captcha response empty")
             return False
 
@@ -271,22 +290,17 @@ class User:
         else:
             self.solver.onFailure(response)
             self.logger.error("didn't participate: %s", str(response))
+            text = f"Не удалось принять участие в https://lolz.guru/threads/{thrid}/"
+            requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
             return False
 
-    def solvepage(self, csrf) -> bool:  # return whether we found any contests or not
+    def solvepage(self) -> bool:
         found_contest = False
-        contestListResp = self.makerequest("POST",
-                                           settings.lolzUrl + "forums/766/",
+        contestListResp = self.makerequest("GET",
+                                           settings.lolzUrl + "forums/contests/",
                                            timeout=12.05,
                                            retries=3,
-                                           checkforjs=True,
-                                           data={
-                                               'from_sidebar': "true",
-                                               '_xfRequestUri': quote("/"),
-                                               '_xfNoRedirect': 1,
-                                               '_xfToken': csrf,
-                                               '_xfResponseType': "html",
-                                           })
+                                           checkforjs=True)
         if contestListResp is None:
             return False
 
@@ -312,7 +326,10 @@ class User:
         # TODO: make threadsList a list of threadids instead of html objects
         # also remove all blacklisted threadids before we get to this point
         self.logger.notice("detected %d contests", len(threadsList))
-        for contestDiv in threadsList:
+        
+        total = 0
+        
+        for contestDiv in threadsList:                
             thrid = int(contestDiv.get('id').split('-')[1])
 
             if thrid in self.blacklist or thrid in settings.ExpireBlacklist:
@@ -322,6 +339,8 @@ class User:
                 continue
 
             found_contest = True
+            contestMoney = contestDiv.find("div", class_="discussionListItem--Wrapper") \
+                .find("span", class_="prefix general moneyContestWithValue").contents[0]
             contestName = contestDiv.find("div", class_="discussionListItem--Wrapper") \
                 .find("a", class_="listBlock main PreviewTooltip") \
                 .find("h3", class_="title").find("span", class_="spanTitle").contents[0]
@@ -329,7 +348,10 @@ class User:
             self.logger.notice("participating in %s thread id %d", contestName, thrid)
 
             if self.solvecontest(thrid):
+                total += 1
                 self.logger.success("successfully participated in %s thread id %s", contestName, thrid)
+                text = f"Успешно! Принято участие в https://lolz.guru/threads/{thrid}/ \nПриз: {contestMoney}₽ \n\nБаланс форума: {utils.getLolzGuruBalance()} \nБаланс сервиса: {utils.getCaptchaGuruBalance()}"
+                requests.get(f"https://api.telegram.org/bot{tg_token}/sendMessage?chat_id={tg_id}&text={text}")
 
             time.sleep(settings.switch_time)
         return found_contest
@@ -346,25 +368,6 @@ class User:
                 self.logger.notice("ip: %s", ip.json()["origin"])
             else:
                 raise RuntimeError("Wasn't able to reach httpbin.org in 30 tries. Check your proxies and your internet connection")
-            mainPage = self.makerequest("GET",
-                                        settings.lolzUrl,
-                                        timeout=12.05,
-                                        retries=30,
-                                        checkforjs=True)
-            if mainPage is None:
-                raise RuntimeError("There was an issue getting lolz main mage")
-
-            mainPageSoup = BeautifulSoup(mainPage.text, "html.parser")
-
-            script = mainPageSoup.find("script", text=pattern_csrf)
-            if script is None:
-                raise RuntimeError("no csrf token!")
-
-            csrf = pattern_csrf.search(script.string).group(1)
-            if not csrf:
-                raise RuntimeError("csrf token is empty. likely bad cookies")
-            self.logger.debug("csrf: %s", str(csrf))
-
             while True:
                 cur_time = time.time()
                 # remove old entries
@@ -372,7 +375,7 @@ class User:
                 self.logger.info("loop at %.2f seconds (blacklist size %d)", cur_time - starttime,
                                  len(settings.ExpireBlacklist))
 
-                if self.solvepage(csrf):
+                if self.solvepage():
                     found_contest = settings.found_count
 
                 if found_contest > 0:
@@ -386,11 +389,12 @@ class User:
         self.username = parameters[0]
 
         self.logger = verboselogs.VerboseLogger(self.username)
-        self.logger.addHandler(fileHandler)
         # self.logger.addHandler(consoleHandler)
         coloredlogs.install(fmt=logfmtstr, stream=sys.stdout, level_styles=level_styles,
                             milliseconds=True, level='DEBUG', logger=self.logger)
         self.logger.debug("user parameters %s", parameters)
+
+        self.monitor_dims = (parameters[1]["monitor_size_x"], parameters[1]["monitor_size_y"])
         self.session.headers.update({"User-Agent": parameters[1]["User-Agent"]})
         for key, value in parameters[1]["cookies"].items():
             self.session.cookies.set(

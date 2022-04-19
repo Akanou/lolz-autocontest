@@ -18,7 +18,12 @@ low_time = data["low_time"]
 high_time = data["high_time"]
 switch_time = data["switch_time"]
 solve_time = data["solve_time"]
+tg_token = data["tg_token"]
+tg_id = data["tg_id"]
+cookie = data["cookie"]
+user_agent = data["user_agent"]
 f.close()
 
 # TODO: this looks very hacky. find a better way
 ExpireBlacklist = dict()
+ProblemBlacklist = list()
